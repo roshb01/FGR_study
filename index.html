@@ -219,6 +219,7 @@
       <div class="rowline"><span class="lbl">FGR cases without an adequate matched control</span><span class="val" id="unmatchedCount">–</span></div>
       <div class="rowline"><span class="lbl">GA bins where controls are underrepresented</span><span class="val" id="underrepCount">–</span></div>
       <div class="rowline"><span class="lbl">Next priority target GA</span><span class="val" id="nextTargetGA">–</span></div>
+      <div class="rowline" style="margin-top:6px;border-top:1px solid var(--border-soft);padding-top:6px;"><span class="lbl">Preterm cases with antenatal-matched control</span><span class="val" id="stratumCount">–</span></div>
       <div style="font-size:11.5px;color:var(--ink-soft);margin-top:8px;">Matching window: ±1w from 37w0d; widens to ±2w at 34–37w and ±3w below 34w, per protocol's broader-early / narrower-at-term rule.</div>
     </div>
 
@@ -249,6 +250,16 @@
 
   <div class="section">
     <div class="section-head">
+      <div>
+        <h2>🔁 Exploratory antenatal stratum</h2>
+        <div class="desc">Preterm FGR cases (&lt;37w) and the control(s) whose antenatal sample was matched to them. A control can appear here and still count as an ordinary control once she delivers — both roles are shown.</div>
+      </div>
+    </div>
+    <div class="unmatched-list" id="stratumList"></div>
+  </div>
+
+  <div class="section">
+    <div class="section-head">
       <div><h2>🔴 FGR cases</h2><div class="desc">Listed by Study ID. Sample checkmarks are locked by default — press 🔒 on a row to unlock it before changing its checkmarks.</div></div>
       <button class="btn primary" onclick="openModal('fgr')">➕ Add new FGR case</button>
     </div>
@@ -270,11 +281,12 @@
 <div class="overlay" id="overlay">
   <div class="modal">
     <h3 id="modalTitle">Add new FGR case</h3>
-    <div class="field"><label>Gestational age at delivery</label>
+    <div class="field"><label id="gaFieldLabel">Gestational age at delivery</label>
       <div class="ga-inline">
         <input type="number" id="fWeeks" placeholder="Weeks" min="20" max="42">
         <input type="number" id="fDays" placeholder="Days" min="0" max="6">
       </div>
+      <div id="gaOptionalHint" style="display:none;font-size:11px;color:var(--ink-faint);margin-top:4px;">Leave blank if she hasn't delivered yet — you can fill this in later by editing this record.</div>
     </div>
     <div class="field" id="deliveryDateField"><label>Date of delivery (optional)</label><input type="date" id="fDate"></div>
     <div class="field" id="statusField" style="display:none;"><label>Control status</label>
@@ -285,7 +297,18 @@
         <label class="checkitem"><input type="checkbox" id="fMat"> 🩸 Maternal blood</label>
         <label class="checkitem"><input type="checkbox" id="fCord"> 🍼 Cord blood</label>
         <label class="checkitem"><input type="checkbox" id="fPlac"> 🔬 Placenta → pathology</label>
-        <label class="checkitem"><input type="checkbox" id="fAnte"> 💉 Additional antenatal blood</label>
+        <label class="checkitem"><input type="checkbox" id="fAnte" onchange="toggleAnteFields()"> 💉 Additional antenatal blood</label>
+      </div>
+    </div>
+    <div id="anteLinkFields" style="display:none;">
+      <div class="field"><label>GA at antenatal draw</label>
+        <div class="ga-inline">
+          <input type="number" id="fAnteWeeks" placeholder="Weeks" min="18" max="40">
+          <input type="number" id="fAnteDays" placeholder="Days" min="0" max="6">
+        </div>
+      </div>
+      <div class="field"><label>Matched to which preterm FGR case?</label>
+        <select id="fMatchedCase"><option value="">— not linked yet —</option></select>
       </div>
     </div>
     <div class="field"><label>Notes (optional)</label><input type="text" id="fNotes" placeholder="Any relevant detail"></div>
@@ -369,13 +392,16 @@ function seedData(){
       deliveryDate:'',
       status: group==='Control' ? 'Recruited' : 'Recruited',
       maternalBlood:mat, cordBlood:cord, placenta:plac, antenatalBlood:ante,
+      antenatalWeeks:null, antenatalDays:null, matchedCaseId:null,
       notes:'', lastUpdatedBy:'seed import', lastUpdatedAt:new Date().toISOString()
     };
   });
 }
 
-function ga(p){ return p.weeks + p.days/7; }
-function gaLabel(p){ return p.weeks+'w'+p.days+'d'; }
+function ga(p){ return (p.weeks==null || p.weeks==='') ? null : p.weeks + p.days/7; }
+function gaLabel(p){ return ga(p)===null ? 'pending delivery' : p.weeks+'w'+p.days+'d'; }
+function antenatalGa(p){ return (p.antenatalWeeks==null || p.antenatalWeeks==='') ? null : p.antenatalWeeks + (p.antenatalDays||0)/7; }
+function antenatalGaLabel(p){ const g=antenatalGa(p); return g===null ? null : p.antenatalWeeks+'w'+p.antenatalDays+'d'; }
 
 // ---------- GitHub Gist sync (used only if connected via Device sync) ----------
 const GH_TOKEN_KEY = 'fgr-imp-gh-token';
@@ -583,14 +609,32 @@ function matchWindow(gaVal){
   return 3;
 }
 function recruitedControls(){ return patients.filter(p=>p.group==='Control' && p.status==='Recruited'); }
+// only controls whose own delivery GA is known — the ones usable for the primary delivery-based comparison
+function deliveredControls(){ return recruitedControls().filter(c=>ga(c)!==null); }
 function fgrCases(){ return patients.filter(p=>p.group==='FGR'); }
+// preterm FGR cases are the ones the protocol's exploratory antenatal stratum applies to
+function pretermFgrCases(){ return fgrCases().filter(f=>ga(f)!==null && ga(f)<37).sort((a,b)=>ga(a)-ga(b)); }
 
 function computeUnmatched(){
-  const ctrls = recruitedControls();
+  const ctrls = deliveredControls();
   return fgrCases().filter(f=>{
+    if(ga(f)===null) return false;
     const w = matchWindow(ga(f));
     return !ctrls.some(c => Math.abs(ga(c)-ga(f)) <= w);
   }).sort((a,b)=>ga(a)-ga(b));
+}
+
+// exploratory antenatal stratum: for each preterm case, find the control(s) explicitly linked via matchedCaseId
+function computeAntenatalStratum(){
+  const linkable = recruitedControls().filter(c=>c.antenatalBlood && antenatalGa(c)!==null);
+  return pretermFgrCases().map(f=>{
+    const linked = linkable.filter(c=>c.matchedCaseId===f.id);
+    return { case:f, linkedControls:linked };
+  });
+}
+// controls with an antenatal sample that isn't yet linked to any preterm case
+function unlinkedAntenatalControls(){
+  return recruitedControls().filter(c=>c.antenatalBlood && antenatalGa(c)!==null && !c.matchedCaseId);
 }
 
 const BINS = [
@@ -606,7 +650,7 @@ const BINS = [
   {lo:41,hi:43,label:'41w+'},
 ];
 function binCounts(){
-  const ctrls = recruitedControls(), f = fgrCases();
+  const ctrls = deliveredControls(), f = fgrCases().filter(p=>ga(p)!==null);
   return BINS.map(b=>{
     const fc = f.filter(p=>ga(p)>=b.lo && ga(p)<b.hi).length;
     const cc = ctrls.filter(p=>ga(p)>=b.lo && ga(p)<b.hi).length;
@@ -630,22 +674,31 @@ function render(){
   const unmatched = computeUnmatched();
   const bins = binCounts();
   const underrep = bins.filter(b=>b.underrep);
+  const stratum = computeAntenatalStratum();
+  const strataLinked = stratum.filter(s=>s.linkedControls.length>0).length;
   document.getElementById('unmatchedCount').textContent = unmatched.length;
   document.getElementById('underrepCount').textContent = underrep.length;
   document.getElementById('nextTargetGA').textContent = unmatched.length ? gaLabel(unmatched[0]) : '—';
+  const stratEl = document.getElementById('stratumCount');
+  if(stratEl) stratEl.textContent = stratum.length ? (strataLinked+' / '+stratum.length) : '0 / 0';
 
-  // sample stats
-  const recruitedAll = [...fgr, ...ctrlsRecruited];
+  // sample stats — only patients who have actually delivered (GA known) belong in the delivery-sample denominator
+  const deliveredFgr = fgr.filter(p=>ga(p)!==null);
+  const deliveredCtrls = ctrlsRecruited.filter(p=>ga(p)!==null);
+  const recruitedAll = [...deliveredFgr, ...deliveredCtrls];
   const n = recruitedAll.length || 1;
   const matN = recruitedAll.filter(p=>p.maternalBlood).length;
   const cordN = recruitedAll.filter(p=>p.cordBlood).length;
   const placN = recruitedAll.filter(p=>p.placenta).length;
+  const anteN = recruitedControls().filter(c=>c.antenatalBlood && antenatalGa(c)!==null).length;
+  const pendingDeliveryCount = ctrlsRecruited.length - deliveredCtrls.length;
   const sg = document.getElementById('sampGrid');
   sg.innerHTML = ['Maternal blood','Cord blood','Placenta pathology'].map((lbl,i)=>{
     const v=[matN,cordN,placN][i];
     const pct = Math.round(v/n*100);
     return `<div class="samp-card"><span class="n">${v}/${recruitedAll.length}</span><span class="pct">${recruitedAll.length?pct:0}%</span><div class="lbl">${lbl}</div></div>`;
-  }).join('');
+  }).join('') + `<div class="samp-card"><span class="n">${anteN}</span><span class="pct">exploratory</span><div class="lbl">💉 Antenatal samples (preterm-matched)</div></div>`
+    + (pendingDeliveryCount ? `<div style="font-size:11px;color:var(--ink-faint);margin-top:6px;">${pendingDeliveryCount} recruited control${pendingDeliveryCount>1?'s':''} not yet counted above — delivery GA still pending.</div>` : '');
 
   // bin chart
   const maxCount = Math.max(1, ...bins.map(b=>Math.max(b.fc,b.cc)));
@@ -678,6 +731,34 @@ function render(){
     }).join('');
   }
 
+  // exploratory antenatal stratum list
+  const sl = document.getElementById('stratumList');
+  if(sl){
+    if(!stratum.length){
+      sl.innerHTML = `<div class="empty-good">No preterm FGR cases yet — the exploratory antenatal stratum will populate once one is added.</div>`;
+    } else {
+      sl.innerHTML = stratum.map(s=>{
+        if(!s.linkedControls.length){
+          return `<div class="unmatched-item"><span class="id">${s.case.id}</span><span>preterm case at ${gaLabel(s.case)}</span><span style="color:var(--ink-faint);">no antenatal-matched control yet</span></div>`;
+        }
+        return s.linkedControls.map(c=>{
+          const deliveredNote = ga(c)!==null
+            ? `also delivered at ${gaLabel(c)} — counts in primary comparison too`
+            : `delivery still pending`;
+          return `<div class="unmatched-item" style="border-color:var(--control);background:var(--control-soft);">
+            <span class="id" style="color:var(--control);">${s.case.id}</span>
+            <span>↔ ${c.id} @ ${antenatalGaLabel(c)}</span>
+            <span style="font-size:11px;color:var(--ink-soft);">${deliveredNote}</span>
+          </div>`;
+        }).join('');
+      }).join('');
+    }
+    const unlinked = unlinkedAntenatalControls();
+    if(unlinked.length){
+      sl.innerHTML += `<div style="font-size:11px;color:var(--warn);background:var(--warn-soft);padding:8px 10px;border-radius:8px;margin-top:4px;">${unlinked.length} control${unlinked.length>1?'s have':' has'} an antenatal sample not yet linked to a case: ${unlinked.map(c=>c.id).join(', ')} — edit the control to link it.</div>`;
+    }
+  }
+
   renderFgrTable(fgr);
   renderCtrlTable(ctrls);
 }
@@ -695,6 +776,9 @@ function toggleLock(id){
   if(unlockedRows.has(id)) unlockedRows.delete(id);
   else unlockedRows.add(id);
   render();
+}
+function editBtnHtml(id, group){
+  return `<button class="lockbtn" title="Edit this record" onclick="openModal('${group}','${id}')">✏️</button>`;
 }
 function deleteBtnHtml(id){
   if(!isAdmin){
@@ -729,7 +813,7 @@ function renderFgrTable(list){
       ${checkboxHtml(p.id,'cordBlood',p.cordBlood)}
       ${checkboxHtml(p.id,'placenta',p.placenta)}
       ${checkboxHtml(p.id,'antenatalBlood',p.antenatalBlood)}
-      <td><div class="rowbtns">${lockBtnHtml(p.id)}${deleteBtnHtml(p.id)}</div></td>
+      <td><div class="rowbtns">${editBtnHtml(p.id,'fgr')}${lockBtnHtml(p.id)}${deleteBtnHtml(p.id)}</div></td>
       <td class="meta-cell">${p.lastUpdatedBy||'—'}<br>${p.lastUpdatedAt?new Date(p.lastUpdatedAt).toLocaleString():''}</td>
     </tr>`).join('');
   document.getElementById('fgrTable').innerHTML = `
@@ -738,19 +822,26 @@ function renderFgrTable(list){
 }
 
 function renderCtrlTable(list){
-  const rows = list.slice().sort((a,b)=>idNum(a)-idNum(b)).map(p=>`
+  const rows = list.slice().sort((a,b)=>idNum(a)-idNum(b)).map(p=>{
+    const gaCell = ga(p)===null
+      ? `<span style="color:var(--ink-faint);font-style:italic;">pending delivery</span>`
+      : gaLabel(p);
+    const anteLine = (p.antenatalBlood && antenatalGa(p)!==null)
+      ? `<div style="font-size:10.5px;color:var(--control);margin-top:2px;">🔗 antenatal @ ${antenatalGaLabel(p)}${p.matchedCaseId ? ' → '+p.matchedCaseId : ' (unlinked)'}</div>`
+      : '';
+    return `
     <tr>
       <td class="idcell">${p.id}</td>
-      <td class="gacell">${gaLabel(p)}</td>
+      <td class="gacell">${gaCell}${anteLine}</td>
       <td><button class="status-pill ${p.status}" onclick="cycleStatus('${p.id}')">${p.status}</button></td>
       <td>${p.deliveryDate||'—'}</td>
       ${checkboxHtml(p.id,'maternalBlood',p.maternalBlood)}
       ${checkboxHtml(p.id,'cordBlood',p.cordBlood)}
       ${checkboxHtml(p.id,'placenta',p.placenta)}
       ${checkboxHtml(p.id,'antenatalBlood',p.antenatalBlood)}
-      <td><div class="rowbtns">${lockBtnHtml(p.id)}${deleteBtnHtml(p.id)}</div></td>
+      <td><div class="rowbtns">${editBtnHtml(p.id,'ctrl')}${lockBtnHtml(p.id)}${deleteBtnHtml(p.id)}</div></td>
       <td class="meta-cell">${p.lastUpdatedBy||'—'}<br>${p.lastUpdatedAt?new Date(p.lastUpdatedAt).toLocaleString():''}</td>
-    </tr>`).join('');
+    </tr>`;}).join('');
   document.getElementById('ctrlTable').innerHTML = `
     <thead><tr><th class="stickyhead">Study ID</th><th>GA</th><th>Status</th><th>Sample date</th><th>🩸 Maternal blood</th><th>🍼 Cord blood</th><th>🔬 Placenta→path</th><th>💉 Antenatal blood</th><th>Row actions</th><th>Last updated</th></tr></thead>
     <tbody>${rows || '<tr><td colspan="10" style="color:var(--ink-faint);">No controls yet.</td></tr>'}</tbody>`;
@@ -781,13 +872,48 @@ async function cycleStatus(id){
   render();
 }
 
-function openModal(group){
+let editingId = null;
+
+function toggleAnteFields(){
+  document.getElementById('anteLinkFields').style.display = document.getElementById('fAnte').checked ? 'block' : 'none';
+}
+
+function populateMatchedCaseSelect(currentValue){
+  const sel = document.getElementById('fMatchedCase');
+  const preterm = pretermFgrCases();
+  sel.innerHTML = '<option value="">— not linked yet —</option>' +
+    preterm.map(f=>`<option value="${f.id}">${f.id} (${gaLabel(f)})</option>`).join('');
+  sel.value = currentValue || '';
+}
+
+function openModal(group, editId){
+  editingId = editId || null;
   modalGroup = group;
-  document.getElementById('modalTitle').textContent = group==='fgr' ? 'Add new FGR case' : 'Add potential control';
+  const isEdit = !!editingId;
+  const p = isEdit ? patients.find(x=>x.id===editingId) : null;
+
+  document.getElementById('modalTitle').textContent = isEdit
+    ? 'Edit '+p.id
+    : (group==='fgr' ? 'Add new FGR case' : 'Add potential control');
+  document.getElementById('gaFieldLabel').textContent = group==='ctrl' ? 'Gestational age at delivery (if known)' : 'Gestational age at delivery';
+  document.getElementById('gaOptionalHint').style.display = group==='ctrl' ? 'block' : 'none';
   document.getElementById('statusField').style.display = group==='ctrl' ? 'block' : 'none';
-  ['fWeeks','fDays','fDate','fNotes'].forEach(id=>document.getElementById(id).value='');
-  ['fMat','fCord','fPlac','fAnte'].forEach(id=>document.getElementById(id).checked=false);
-  document.getElementById('fStatus').value='Available';
+
+  document.getElementById('fWeeks').value = isEdit && p.weeks!=null ? p.weeks : '';
+  document.getElementById('fDays').value = isEdit && p.weeks!=null ? p.days : '';
+  document.getElementById('fDate').value = isEdit ? (p.deliveryDate||'') : '';
+  document.getElementById('fNotes').value = isEdit ? (p.notes||'') : '';
+  document.getElementById('fMat').checked = isEdit ? !!p.maternalBlood : false;
+  document.getElementById('fCord').checked = isEdit ? !!p.cordBlood : false;
+  document.getElementById('fPlac').checked = isEdit ? !!p.placenta : false;
+  document.getElementById('fAnte').checked = isEdit ? !!p.antenatalBlood : false;
+  document.getElementById('fStatus').value = isEdit ? p.status : 'Available';
+  document.getElementById('fAnteWeeks').value = isEdit && p.antenatalWeeks!=null ? p.antenatalWeeks : '';
+  document.getElementById('fAnteDays').value = isEdit && p.antenatalWeeks!=null ? p.antenatalDays : '';
+
+  populateMatchedCaseSelect(isEdit ? p.matchedCaseId : '');
+  toggleAnteFields();
+
   document.getElementById('modalErr').textContent='';
   document.getElementById('overlay').classList.add('open');
   suppressAutoRefresh = true;
@@ -798,30 +924,58 @@ function closeModal(){
 }
 
 document.getElementById('modalSubmit').onclick = async ()=>{
-  const w = parseInt(document.getElementById('fWeeks').value,10);
-  const d = parseInt(document.getElementById('fDays').value||'0',10);
   const err = document.getElementById('modalErr');
-  if(isNaN(w) || w<20 || w>44){ err.textContent='Enter a valid gestational age in weeks.'; return; }
   const group = modalGroup==='fgr' ? 'FGR' : 'Control';
-  const prefix = group==='FGR' ? 'FGR' : 'CTRL';
-  const existingNums = patients.filter(p=>p.group===group).map(p=>parseInt(p.id.split('-')[1],10));
-  const next = (existingNums.length ? Math.max(...existingNums) : 0) + 1;
-  const id = prefix+'-'+String(next).padStart(3,'0');
-  if(patients.some(p=>p.id===id)){ err.textContent='A patient with this ID already exists — refresh and try again.'; return; }
+  const wRaw = document.getElementById('fWeeks').value;
+  const dRaw = document.getElementById('fDays').value;
+  let w = wRaw==='' ? null : parseInt(wRaw,10);
+  let d = dRaw==='' ? 0 : parseInt(dRaw,10);
 
-  const p = {
-    id, group, weeks:w, days:isNaN(d)?0:d,
+  if(group==='FGR' && (w==null || isNaN(w) || w<20 || w>44)){
+    err.textContent='Enter a valid gestational age in weeks.'; return;
+  }
+  if(w!=null && (isNaN(w) || w<18 || w>44)){ err.textContent='Enter a valid gestational age in weeks, or leave both fields blank.'; return; }
+  if(w!=null && isNaN(d)) d = 0;
+
+  const anteChecked = document.getElementById('fAnte').checked;
+  let anteW = null, anteD = null, matchedCaseId = null;
+  if(anteChecked){
+    const awRaw = document.getElementById('fAnteWeeks').value;
+    if(awRaw!==''){
+      anteW = parseInt(awRaw,10);
+      anteD = parseInt(document.getElementById('fAnteDays').value||'0',10);
+      if(isNaN(anteW) || anteW<18 || anteW>40){ err.textContent='Enter a valid GA for the antenatal draw, or leave it blank.'; return; }
+    }
+    matchedCaseId = document.getElementById('fMatchedCase').value || null;
+  }
+
+  const fields = {
+    weeks:w, days:w==null?0:d,
     deliveryDate: document.getElementById('fDate').value || '',
     status: group==='Control' ? document.getElementById('fStatus').value : 'Recruited',
     maternalBlood: document.getElementById('fMat').checked,
     cordBlood: document.getElementById('fCord').checked,
     placenta: document.getElementById('fPlac').checked,
-    antenatalBlood: document.getElementById('fAnte').checked,
+    antenatalBlood: anteChecked,
+    antenatalWeeks: anteW, antenatalDays: anteD, matchedCaseId,
     notes: document.getElementById('fNotes').value || '',
     lastUpdatedBy: userName || 'unnamed user',
     lastUpdatedAt: new Date().toISOString()
   };
-  patients.push(p);
+
+  if(editingId){
+    const idx = patients.findIndex(x=>x.id===editingId);
+    if(idx===-1){ err.textContent='This record no longer exists — refresh and try again.'; return; }
+    patients[idx] = { ...patients[idx], ...fields };
+  } else {
+    const prefix = group==='FGR' ? 'FGR' : 'CTRL';
+    const existingNums = patients.filter(p=>p.group===group).map(p=>parseInt(p.id.split('-')[1],10));
+    const next = (existingNums.length ? Math.max(...existingNums) : 0) + 1;
+    const id = prefix+'-'+String(next).padStart(3,'0');
+    if(patients.some(p=>p.id===id)){ err.textContent='A patient with this ID already exists — refresh and try again.'; return; }
+    patients.push({ id, group, ...fields });
+  }
+
   await saveAll();
   closeModal();
   render();
